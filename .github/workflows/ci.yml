@@ -20,7 +20,7 @@ jobs:
   # Will enable this after overhaul of frontend for linting
   frontend-tests:
     name: Frontend Tests (React + Vitest)
-    runs-on: ubuntu-latest
+    runs-on: boat
     defaults:
       run:
         working-directory: ./archon-ui-main
@@ -58,7 +58,7 @@ jobs:
       #   with:
       #     name: frontend-test-results
       #     path: |
-      #       archon-ui-main/coverage/test-results.json
+      #       archon-ui-main/public/test-results/test-results.json
       #       archon-ui-main/public/test-results/
       #     retention-days: 30
 # 
@@ -74,7 +74,7 @@ jobs:
   # Job 2: Backend Testing (Python/pytest)
   backend-tests:
     name: Backend Tests (Python + pytest)
-    runs-on: ubuntu-latest
+    runs-on: boat
     defaults:
       run:
         working-directory: ./python
@@ -86,40 +86,26 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
-          version: "latest"
+          version: "0.12.0"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        run: |
-          uv sync --group all --group dev
-          uv add pytest-cov
+        run: uv sync --locked --group all --group dev
 
-      - name: Run linting with ruff (if available)
-        continue-on-error: true
-        run: |
-          if uv run which ruff > /dev/null 2>&1; then
-            echo "Running ruff linting..."
-            uv run ruff check src/ tests/ || true
-          else
-            echo "Ruff not found, skipping linting"
-          fi
+      - name: Run linting with ruff
+        run: .venv/bin/ruff check src/ tests/
 
-      - name: Run type checking with mypy (if available)
-        continue-on-error: true
-        run: |
-          if uv run which mypy > /dev/null 2>&1; then
-            echo "Running mypy type checking..."
-            uv run mypy src/ || true
-          else
-            echo "MyPy not found, skipping type checking"
-          fi
+      - name: Run type checking with mypy
+        if: ${{ !cancelled() }}
+        run: .venv/bin/mypy src/
 
       - name: Run all tests
+        if: ${{ !cancelled() }}
         run: |
           echo "Running all unit tests..."
-          uv run pytest tests/ --verbose --tb=short \
+          uv run --no-sync pytest tests/ --verbose --tb=short \
             --cov=src --cov-report=xml --cov-report=html \
             --cov-report=term-missing \
             --junitxml=test-results.xml
@@ -147,7 +133,7 @@ jobs:
   # Job 3: Docker Build Test
   docker-build-test:
     name: Docker Build Tests
-    runs-on: ubuntu-latest
+    runs-on: boat
     
     strategy:
       matrix:
@@ -244,11 +230,14 @@ jobs:
   # Job 4: Test Results Summary
   test-summary:
     name: Test Results Summary
-    runs-on: ubuntu-latest
+    runs-on: boat
     needs: [frontend-tests, backend-tests, docker-build-test]
     if: always()
 
     steps:
+      - name: Checkout summary implementation
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         
@@ -259,25 +248,20 @@ jobs:
           
           # Frontend Results
           echo "## 🎨 Frontend Tests (React + Vitest)" >> $GITHUB_STEP_SUMMARY
-          if [ -f "frontend-test-results/coverage/test-results.json" ]; then
-            echo "✅ Frontend tests completed" >> $GITHUB_STEP_SUMMARY
+          echo "Frontend validation is deliberately disabled pending overhaul; install-only success is not test acceptance." >> $GITHUB_STEP_SUMMARY
+          if [ -f "frontend-test-results/test-results.json" ]; then
+            echo "Frontend test artifact present; not proof of passing checks." >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Frontend tests failed or incomplete" >> $GITHUB_STEP_SUMMARY
+            echo "Frontend test artifact absent (validation remains gated)." >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Backend Results
           echo "## 🐍 Backend Tests (Python + pytest)" >> $GITHUB_STEP_SUMMARY
-          if [ -d "backend-test-results-unit" ]; then
-            echo "✅ Unit tests completed" >> $GITHUB_STEP_SUMMARY
+          if [ -f "backend-test-results/test-results.xml" ]; then
+            echo "Backend test artifact present; required job status is checked below." >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Unit tests failed or incomplete" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ -d "backend-test-results-integration" ]; then
-            echo "✅ Integration tests completed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Integration tests failed or incomplete" >> $GITHUB_STEP_SUMMARY
+            echo "Backend test artifact absent." >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -288,7 +272,7 @@ jobs:
           
           # Coverage Information
           echo "## 📊 Coverage Reports" >> $GITHUB_STEP_SUMMARY
-          echo "Coverage reports have been uploaded to Codecov and are available as artifacts." >> $GITHUB_STEP_SUMMARY
+          echo "Coverage availability depends on enabled jobs and uploaded artifacts." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Architecture Context
@@ -298,3 +282,9 @@ jobs:
           echo "- **MCP Service**: MCP protocol server (Port 8051)" >> $GITHUB_STEP_SUMMARY
           echo "- **Agents Service**: PydanticAI agents (Port 8052)" >> $GITHUB_STEP_SUMMARY
           echo "- **Database**: Supabase (PostgreSQL + pgvector)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Require successful job results
+        if: always()
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/require-results.py

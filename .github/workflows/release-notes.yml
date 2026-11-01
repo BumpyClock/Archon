@@ -11,7 +11,7 @@ on:
 jobs:
   generate-release-notes:
     name: Generate Release Notes with Claude
-    runs-on: ubuntu-latest
+    runs-on: boat
 
     permissions:
       contents: write
